@@ -6,8 +6,8 @@ const xlsx = require('xlsx');
 // ==================== 配置 ====================
 const CONFIG = {
   DAILY_LIMIT: 200,
-  MIN_DELAY: 3000,  // 3秒
-  MAX_DELAY: 5000,  // 5秒
+  MIN_DELAY: 1500,  // 1.5秒（原3秒的一半）
+  MAX_DELAY: 2500,  // 2.5秒（原5秒的一半）
   COOKIES_PATH: './cookies.json',
   EXCEL_PATH: path.join(process.env.USERPROFILE || process.env.HOME, 'Desktop', `LinkedIn_FollowUp_${new Date().toISOString().split('T')[0]}_${Date.now()}.xlsx`),
   CHROME_PATH: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
@@ -21,10 +21,10 @@ async function randomDelay() {
   await new Promise(resolve => setTimeout(resolve, delay));
 }
 
-// 偶尔长停顿（8-10秒）
+// 偶尔长停顿（4-5秒，原来是8-10秒）
 async function occasionalLongDelay() {
   if (Math.random() < 0.1) { // 10% 概率
-    const delay = Math.floor(Math.random() * 2000) + 8000;
+    const delay = Math.floor(Math.random() * 1000) + 4000;
     console.log(`  [拟人化] 长停顿 ${delay/1000} 秒...`);
     await new Promise(resolve => setTimeout(resolve, delay));
   }

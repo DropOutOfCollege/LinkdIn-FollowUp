@@ -1,0 +1,12 @@
+node_modules/
+cookies.json
+*.log
+error_*.png
+profile_*.png
+typed_*.png
+after_click_*.png
+linkedin_*.png
+page_debug.html
+debug.json
+connections.json
+send-results.json

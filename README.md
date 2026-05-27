@@ -40,7 +40,7 @@ node linkedin-followup.js \
 | `--message` | 消息模板（含 `{FirstName}`） | 必填 |
 | `--docs-path` | 多语言文档目录 | 必填 |
 | `--limit` | 每日发送上限（最大200） | 200 |
-| `--delay` | 基础延迟（秒） | 3-5随机 |
+| `--delay` | 基础延迟（秒） | 1.5-2.5随机 |
 | `--excel-path` | Excel保存路径 | 桌面 |
 | `--resume` | 从上次中断继续 | false |
 
