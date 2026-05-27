@@ -9,7 +9,7 @@ const CONFIG = {
   MIN_DELAY: 3000,  // 3秒
   MAX_DELAY: 5000,  // 5秒
   COOKIES_PATH: './cookies.json',
-  EXCEL_PATH: path.join(process.env.USERPROFILE || process.env.HOME, 'Desktop', `LinkedIn_FollowUp_${new Date().toISOString().split('T')[0]}.xlsx`),
+  EXCEL_PATH: path.join(process.env.USERPROFILE || process.env.HOME, 'Desktop', `LinkedIn_FollowUp_${new Date().toISOString().split('T')[0]}_${Date.now()}.xlsx`),
   CHROME_PATH: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
 };
 
@@ -82,6 +82,43 @@ function appendToExcel(excel, data) {
   xlsx.writeFile(excel.wb, CONFIG.EXCEL_PATH);
 }
 
+// 读取已发送记录（避免重复）
+function loadSentHistory() {
+  const history = new Set();
+  
+  // 查找桌面所有 LinkedIn_FollowUp Excel 文件
+  const desktopPath = path.join(process.env.USERPROFILE || process.env.HOME, 'Desktop');
+  
+  if (fs.existsSync(desktopPath)) {
+    const files = fs.readdirSync(desktopPath);
+    const excelFiles = files.filter(f => f.startsWith('LinkedIn_FollowUp_') && f.endsWith('.xlsx'));
+    
+    for (const file of excelFiles) {
+      try {
+        const filePath = path.join(desktopPath, file);
+        const workbook = xlsx.readFile(filePath);
+        const sheet = workbook.Sheets['发送记录'];
+        
+        if (sheet) {
+          const data = xlsx.utils.sheet_to_json(sheet, { header: 1 });
+          // 跳过表头，从第二行开始
+          for (let i = 1; i < data.length; i++) {
+            const row = data[i];
+            if (row && row[1]) { // 姓名在第2列
+              history.add(row[1].toString().trim());
+            }
+          }
+        }
+      } catch (e) {
+        console.log(`  读取历史记录失败: ${file}`);
+      }
+    }
+  }
+  
+  console.log(`  已加载 ${history.size} 条历史发送记录`);
+  return history;
+}
+
 // 检测语言
 function detectLanguage(name, title) {
   const text = (name + ' ' + title).toLowerCase();
@@ -107,7 +144,7 @@ function detectLanguage(name, title) {
   return 'en';
 }
 
-// 根据语言匹配文档
+// 根据语言匹配文档（支持 PDF 和 DOCX）
 function findDocument(docsPath, language) {
   if (!fs.existsSync(docsPath)) return null;
   
@@ -115,14 +152,18 @@ function findDocument(docsPath, language) {
   const patterns = {
     'en': [/en/i, /english/i, /_en/i],
     'es': [/es/i, /spanish/i, /español/i, /_es/i],
-    'pt': [/pt/i, /portuguese/i, /português/i, /_pt/i],
-    'zh': [/cn/i, /chinese/i, /zh/i, /_zh/i]
+    'pt': [/pt/i, /portuguese/i, /português/i, /_pt/i, /br/i],
+    'zh': [/cn/i, /chinese/i, /zh/i, /_zh/i, /中文/i]
   };
   
   const patterns_for_lang = patterns[language] || patterns['en'];
   
+  // 支持 PDF 和 DOCX
+  const supportedExts = ['.pdf', '.docx'];
+  
   for (const file of files) {
-    if (!file.endsWith('.pdf')) continue;
+    const ext = path.extname(file).toLowerCase();
+    if (!supportedExts.includes(ext)) continue;
     
     for (const pattern of patterns_for_lang) {
       if (pattern.test(file)) {
@@ -131,15 +172,24 @@ function findDocument(docsPath, language) {
     }
   }
   
-  // 如果没找到，返回第一个 PDF
-  const firstPdf = files.find(f => f.endsWith('.pdf'));
-  return firstPdf ? path.join(docsPath, firstPdf) : null;
+  // 如果没找到，返回第一个支持的文件
+  const firstFile = files.find(f => {
+    const ext = path.extname(f).toLowerCase();
+    return supportedExts.includes(ext);
+  });
+  return firstFile ? path.join(docsPath, firstFile) : null;
 }
 
 // ==================== 核心逻辑 ====================
 
-async function sendMessageToConnection(page, connection, messageTemplate, docsPath, excel, sentCount) {
+async function sendMessageToConnection(page, connection, messageTemplate, docsPath, excel, sentCount, sentHistory) {
   try {
+    // 检查是否已经发送过
+    if (sentHistory.has(connection.name)) {
+      console.log(`\n[${sentCount + 1}/${CONFIG.DAILY_LIMIT}] 跳过: ${connection.name} (已发送过)`);
+      return { success: false, reason: 'already_sent' };
+    }
+    
     console.log(`\n[${sentCount + 1}/${CONFIG.DAILY_LIMIT}] 处理: ${connection.name}`);
     
     // 1. 导航到 Profile
@@ -190,10 +240,14 @@ async function sendMessageToConnection(page, connection, messageTemplate, docsPa
     await messageBtn.click();
     await randomDelay();
     
-    // 4. 输入消息
+    // 4. 输入消息 - 使用正确的名字
     console.log('  4. 输入消息...');
+    // 从 connection.name 提取 first name
     const firstName = connection.name.split(' ')[0];
-    const message = messageTemplate.replace(/{FirstName}/gi, firstName);
+    // 替换模板中的 {FirstName}
+    const message = messageTemplate.replace(/\{FirstName\}/gi, firstName);
+    
+    console.log(`     使用名字: ${firstName}`);
     
     let msgInput = null;
     const inputSelectors = [
@@ -237,10 +291,15 @@ async function sendMessageToConnection(page, connection, messageTemplate, docsPa
       attachmentName = path.basename(docPath);
       console.log(`     附件: ${attachmentName}`);
       
-      // 点击附件按钮
-      const attachBtn = await page.locator('button[aria-label*="attach"], button[aria-label*="file"]').first();
+      // 点击附件按钮（使用 force 避免被拦截）
+      const attachBtn = await page.locator('button[aria-label*="attach"], button[aria-label*="file"], button[title*="Attach"]').first();
       if (attachBtn) {
-        await attachBtn.click();
+        try {
+          await attachBtn.click({ force: true });
+        } catch (e) {
+          // 如果 force click 失败，尝试 JavaScript click
+          await attachBtn.evaluate(el => el.click());
+        }
         await randomDelay();
         
         // 上传文件
@@ -268,7 +327,10 @@ async function sendMessageToConnection(page, connection, messageTemplate, docsPa
     for (const selector of sendSelectors) {
       try {
         sendBtn = await page.waitForSelector(selector, { timeout: 3000 });
-        if (sendBtn) break;
+        if (sendBtn) {
+          console.log(`     找到发送按钮: ${selector}`);
+          break;
+        }
       } catch (e) {}
     }
     
@@ -316,6 +378,9 @@ async function sendMessageToConnection(page, connection, messageTemplate, docsPa
     
     if (sent) {
       console.log('     ✅ 发送成功');
+      // 添加到历史记录
+      sentHistory.add(connection.name);
+      
       appendToExcel(excel, {
         name: connection.name,
         url: connection.url,
@@ -326,6 +391,7 @@ async function sendMessageToConnection(page, connection, messageTemplate, docsPa
         status: '成功',
         note: ''
       });
+      await page.waitForTimeout(3000);
       return { success: true };
     } else {
       console.log('     ❌ 发送失败');
@@ -393,11 +459,15 @@ async function main() {
   console.log('加载 cookies...');
   const cookies = loadCookies();
   
+  // 加载已发送历史
+  console.log('加载已发送历史...');
+  const sentHistory = loadSentHistory();
+  
   // 初始化 Excel
   console.log('初始化 Excel...');
   const excel = initExcel();
   
-  // 启动浏览器
+  // 启动浏览器 - 只启动一次，复用同一个实例
   console.log('启动浏览器...');
   const browser = await chromium.launch({
     headless: false,
@@ -416,7 +486,7 @@ async function main() {
   let processedCount = 0;
   
   try {
-    // 导航到 Connections 页面
+    // 导航到 Connections 页面 - 只导航一次
     console.log('访问 Connections 页面...');
     await page.goto('https://www.linkedin.com/mynetwork/invite-connect/connections/');
     await randomDelay();
@@ -426,25 +496,33 @@ async function main() {
     while (sentCount < limit) {
       console.log(`\n--- 处理页面上的联系人 (${sentCount}/${limit}) ---`);
       
-      // 获取当前页面的联系人
+      // 获取当前页面的联系人 - 严格按照页面顺序
       const connections = await page.evaluate(() => {
-        const buttons = document.querySelectorAll('button[aria-label^="More actions for"]');
-        return Array.from(buttons).map(btn => {
-          const ariaLabel = btn.getAttribute('aria-label');
-          const name = ariaLabel.replace('More actions for ', '').trim();
+        const results = [];
+        
+        // 查找所有连接卡片
+        const cards = document.querySelectorAll('.mn-connection-card, li.artdeco-list__item');
+        
+        for (const card of cards) {
+          // 获取姓名
+          const nameEl = card.querySelector('.mn-connection-card__name, span[dir="ltr"]');
+          const name = nameEl ? nameEl.textContent.trim() : '';
           
-          // 查找对应的链接
-          let container = btn.parentElement;
-          for (let i = 0; i < 8; i++) {
-            if (!container) break;
-            container = container.parentElement;
+          // 获取职位
+          const titleEl = card.querySelector('.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle');
+          const title = titleEl ? titleEl.textContent.trim() : '';
+          
+          // 获取链接
+          const linkEl = card.querySelector('a[href*="/in/"]');
+          const url = linkEl ? linkEl.href : '';
+          
+          // 只添加有效的联系人
+          if (name && url && !url.includes('undefined')) {
+            results.push({ name, title, url });
           }
-          
-          const link = container ? container.querySelector('a[href*="/in/"]') : null;
-          const url = link ? link.href : '';
-          
-          return { name, url };
-        }).filter(c => c.name && c.url);
+        }
+        
+        return results;
       });
       
       console.log(`  页面上有 ${connections.length} 个联系人`);
@@ -454,7 +532,7 @@ async function main() {
         break;
       }
       
-      // 处理每个联系人
+      // 处理每个联系人 - 严格按照页面顺序
       for (const connection of connections) {
         if (sentCount >= limit) {
           console.log(`\n✅ 已达到每日上限 ${limit} 人，停止`);
@@ -464,15 +542,15 @@ async function main() {
         processedCount++;
         
         // 发送消息
-        const result = await sendMessageToConnection(page, connection, params.message, docsPath, excel, sentCount);
+        const result = await sendMessageToConnection(page, connection, params.message, docsPath, excel, sentCount, sentHistory);
         
         if (result.success) {
           sentCount++;
         }
         
-        // 返回 Connections 页面
+        // 返回 Connections 页面 - 使用浏览器的返回按钮
         console.log('  返回 Connections 页面...');
-        await page.goto('https://www.linkedin.com/mynetwork/invite-connect/connections/');
+        await page.goBack();
         await randomDelay();
         
         // 额外随机停顿
@@ -495,7 +573,7 @@ async function main() {
     console.log('\n保存 Excel...');
     xlsx.writeFile(excel.wb, CONFIG.EXCEL_PATH);
     
-    // 关闭浏览器
+    // 关闭浏览器 - 只关闭一次
     await browser.close();
     
     // 输出统计
@@ -504,6 +582,7 @@ async function main() {
     console.log('========================================');
     console.log(`处理联系人: ${processedCount}`);
     console.log(`成功发送: ${sentCount}`);
+    console.log(`跳过(已发送): ${sentHistory.size}`);
     console.log(`Excel 文件: ${CONFIG.EXCEL_PATH}`);
     console.log('========================================');
   }
