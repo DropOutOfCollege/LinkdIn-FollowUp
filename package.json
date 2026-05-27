@@ -1,0 +1,23 @@
+{
+  "name": "linkedin-followup",
+  "version": "1.0.0",
+  "description": "LinkedIn Follow-up Automation - Send personalized messages with multi-language documents",
+  "main": "linkedin-followup.js",
+  "scripts": {
+    "start": "node linkedin-followup.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "linkedin",
+    "automation",
+    "followup",
+    "messaging",
+    "sales"
+  ],
+  "author": "BSJ Technology",
+  "license": "MIT",
+  "dependencies": {
+    "playwright": "^1.40.0",
+    "xlsx": "^0.18.5"
+  }
+}
